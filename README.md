@@ -24,9 +24,13 @@ These are the failure modes `jev-metrics` detects:
 | Confidence ↑ but fault rate stays flat | Confidence is decorative, not predictive |
 | High-score + high-confidence → later faulty | **False confidence** — the dangerous case to fix first |
 | One metric dominates faults regardless of score | The rubric/criteria for that metric is mis-leveraged |
+| **Score rises across rounds but faults persist** | **Rubric drift** — the scoring rubric got more lenient over time |
 | Most outcomes never recorded | You are flying blind on everything except the few metrics you check |
 
-The headline number is the **False-Confidence rate**: of all evaluations scored ≥7 at ≥0.8 confidence, what fraction later turned out to be genuinely faulty in that metric. A healthy setup drives that toward 0.
+The headline numbers:
+- **False-Confidence rate** — of all evaluations scored ≥7 at ≥0.8 confidence, what fraction later turned out to be genuinely faulty in that metric. A healthy setup drives this toward 0.
+- **Expected Calibration Error (ECE)** — the average gap between reported confidence and observed fault probability, weighted by sample size. Lower is better; a perfectly calibrated system is 0.
+- **Rubric drift** — a metric whose *average score rose across rounds* yet *fault rate stayed high* (≥35% in recent rounds). That is the signature of a scoring rubric that has drifted lenient and is now systematically missing real faults.
 
 ---
 
@@ -85,7 +89,7 @@ node dist/cli.js report --db .jev-metrics.sqlite            # to stdout
 node dist/cli.js report --db .jev-metrics.sqlite --out report.md
 ```
 
-The Markdown report contains: **Change timeline**, **Score trend** matrix (`—` for not-applicable), **Regressions** (drops ≥0.5 between rounds), and the **Calibration audit** (confidence buckets with fault rates, the false-confidence list, and per-metric coverage).
+The Markdown report contains: **Change timeline**, **Score trend** matrix (`—` for not-applicable), **Regressions** (drops ≥0.5 between rounds), and the **Calibration audit** (confidence buckets with fault rates, a **reliability diagram + ECE**, **rubric drift**, the false-confidence list, and per-metric coverage).
 
 ---
 
@@ -160,11 +164,14 @@ erDiagram
 
 ## Roadmap / extensions
 
-The core is intentionally small (three modules: `store`, `calibration`, `report`). Natural additions:
+The core is intentionally small (three modules: `store`, `calibration`, `report`). Implemented:
+
+- **Per-metric rubric drift** ✅ — flags a metric whose average score rose across rounds yet fault rate stayed high (≥35% in recent rounds), i.e. the most likely rubric failure.
+- **Reliability diagram + ECE** ✅ — a real confidence-vs-fault curve, monotonicity check, and Expected Calibration Error for full calibration reporting.
+
+Next:
 
 - **Auto-split review** — feed a `jev_review` structured response directly (it already returns the `Evaluation` shape) so annotating after each PR is one call.
-- **Reliability diagram** — a real confidence-vs-fault curve and ECE for full calibration reporting.
-- **Per-metric rubric drift** — flag a metric whose *fault rate stays high even as scores rise*, i.e. the most likely rubric failure.
 - **GitHub Action** — generate the report as a PR comment on merge.
 
 ---

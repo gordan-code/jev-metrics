@@ -36,12 +36,21 @@ USAGE (all subcommands take --db <path>; default ${DEFAULT_DB}):
 /** Read a JSON value from a file path or stdin ("-" or undefined). */
 function readJsonArg(file: string | undefined): unknown {
   if (file && file !== "-") {
-    return JSON.parse(readFileSync(file, "utf8"));
+    return parseJsonSafely(readFileSync(file, "utf8"));
   }
   // Synchronously read all of fd 0 (stdin) — keeps the CLI run-to-completion.
   const text = readFileSync(0, "utf8").trim();
   if (!text) throw new Error("Empty stdin. Provide JSON via --file or pipe it in.");
-  return JSON.parse(text);
+  return parseJsonSafely(text);
+}
+
+/** JSON.parse with a BOM-tolerant first read (Windows editors add a BOM). */
+function parseJsonSafely(text: string): unknown {
+  // Strip a UTF-8 byte-order mark if present.
+  const cleaned = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const trimmed = cleaned.trim();
+  if (!trimmed) throw new Error("Empty input. Provide a non-empty JSON document.");
+  return JSON.parse(trimmed);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

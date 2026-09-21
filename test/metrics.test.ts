@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MetricsStore } from "../src/store.js";
-import { buildCalibrationReport, collectSamples } from "../src/calibration.js";
+import { buildCalibrationReport, collectSamples, detectRubricDrift, buildReliabilityDiagram, computeECE, type CalibrationBucket } from "../src/calibration.js";
 import { buildMetricsReport, buildTimeSeries, renderMarkdownReport } from "../src/report.js";
 import type { Evaluation, MetricKey } from "../src/types.js";
 
@@ -122,3 +122,68 @@ test("time series only counts applicable metrics", () => {
   // In record "b" correctness is not applicable, so second cell is undefined
   assert.deepEqual(correctness.values, [7, undefined]);
 });
+
+test("rubric drift flags a metric whose score rose but fault rate stayed high", () => {
+  // 6 samples of "security": early rounds low score+low faults, late rounds HIGH score but STILL faulty
+  const samples = [
+    // early: score 5.x, low fault rate
+    mk("security", 5.0, true, 0), mk("security", 5.2, false, 1), mk("security", 5.4, true, 2),
+    // late: score 8.x but faults persist => drift signal
+    mk("security", 8.0, true, 3), mk("security", 8.5, true, 4), mk("security", 8.9, true, 5)
+  ];
+  const drift = detectRubricDrift(samples);
+  const security = drift.find((d) => d.metric === "security")!;
+  assert.equal(security.flag, "drift");
+  assert.ok(security.scoreRise >= 0.5);
+  assert.ok(security.faultRate >= 0.35);
+});
+
+test("rubric drift does NOT flag a metric that rose AND cleared its faults", () => {
+  const samples = [
+    mk("testQuality", 4.0, true, 0), mk("testQuality", 4.5, true, 1), mk("testQuality", 5.0, true, 2),
+    // late: high score, no faults => healthy improvement
+    mk("testQuality", 7.5, false, 3), mk("testQuality", 8.0, false, 4), mk("testQuality", 8.5, false, 5)
+  ];
+  const drift = detectRubricDrift(samples);
+  const tq = drift.find((d) => d.metric === "testQuality")!;
+  // score rose >= 0.5 but fault rate dropped below 0.35 => "rising-inconclusive" (not "drift")
+  assert.notEqual(tq.flag, "drift");
+});
+
+test("reliability diagram and ECE reward a well-calibrated bucket set", () => {
+  // Buckets where high confidence buckets have low fault rate and small gap => low ECE
+  const buckets: CalibrationBucket[] = [
+    { low: 0.6, label: "0.6–0.7", count: 10, faultyCount: 8, faultyRate: 0.8, insufficient: false },
+    { low: 0.9, label: "0.9–1.0", count: 10, faultyCount: 1, faultyRate: 0.1, insufficient: false }
+  ];
+  const rel = buildReliabilityDiagram(buckets);
+  // monotonic: 0.9 bucket fault prob (0.1) < 0.6 bucket (0.8) => true
+  assert.equal(rel.monotonicUphill, true);
+  // rank correlation positive
+  assert.ok(rel.rankCorrelation > 0);
+  const ece = computeECE(rel.buckets);
+  assert.ok(ece > 0 && ece < 1);
+});
+
+test("poorly calibrated buckets get high ECE / non-monotonic flag", () => {
+  // 0.6 bucket clean but 0.9 bucket faulty => confidence is misleading
+  const buckets: CalibrationBucket[] = [
+    { low: 0.6, label: "0.6–0.7", count: 10, faultyCount: 1, faultyRate: 0.1, insufficient: false },
+    { low: 0.9, label: "0.9–1.0", count: 10, faultyCount: 9, faultyRate: 0.9, insufficient: false }
+  ];
+  const rel = buildReliabilityDiagram(buckets);
+  assert.equal(rel.monotonicUphill, false);
+  assert.ok(rel.rankCorrelation < 0);
+});
+
+// helper: build a ConfidenceSample with roundIndex
+function mk(metric: MetricKey, score: number, faulty: boolean, roundIndex: number) {
+  return {
+    metric,
+    evaluationKey: "k" + roundIndex,
+    confidence: 0.8 + roundIndex * 0.01,
+    score,
+    faulty,
+    roundIndex
+  };
+}

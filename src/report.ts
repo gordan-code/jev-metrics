@@ -152,6 +152,43 @@ export function renderMarkdownReport(report: MetricsReport): string {
   }
   lines.push("");
 
+  lines.push(`### Reliability diagram (ECE ${cal.ece.toFixed(3)})`);
+  lines.push("");
+  lines.push("| confidence | samples | prob. faulty | mean conf | gap |");
+  lines.push("|------------|---------|--------------|-----------|-----|");
+  for (const rb of cal.reliability.buckets) {
+    lines.push(
+      `| ${rb.label} | ${rb.count} | ${fmtPct(rb.probFaulty)} | ${rb.count ? rb.meanConfidence.toFixed(2) : "—"} | ${rb.count ? rb.gap.toFixed(2) : "—"} |`
+    );
+  }
+  lines.push("");
+  lines.push(
+    `_Rank correlation (conf↑ ⇒ fault↓): ${cal.reliability.rankCorrelation > 0 ? "+" : ""}${cal.reliability.rankCorrelation.toFixed(2)} · ${
+      cal.reliability.monotonicUphill
+        ? "fault probability monotonically decreases with confidence (good)."
+        : "fault probability does NOT monotonically decrease with confidence (⚠)."
+    }_`
+  );
+  lines.push("");
+
+  const drifts = cal.rubricDrift.filter((d) => d.flag === "drift");
+  lines.push("### Rubric drift (score rose across rounds but fault rate stayed high)");
+  lines.push("");
+  if (drifts.length === 0) {
+    lines.push("_No rubric drift detected._");
+  } else {
+    lines.push("| metric | samples | early mean | late mean | score rise | fault rate |");
+    lines.push("|--------|---------|------------|-----------|------------|------------|");
+    for (const d of cal.rubricDrift) {
+      lines.push(
+        `| ${d.metric} | ${d.samples} | ${d.earlyMeanScore.toFixed(1)} | ${d.lateMeanScore.toFixed(1)} | ${
+          d.scoreRise > 0 ? "+" : ""
+        }${d.scoreRise.toFixed(1)} | ${fmtPct(d.faultRate)} |`
+      );
+    }
+  }
+  lines.push("");
+
   lines.push("### Coverage by metric");
   lines.push("");
   lines.push("| metric | samples | fault rate | min conf | max conf |");

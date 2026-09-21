@@ -33,6 +33,8 @@ export interface ConfidenceSample {
   confidence: number;
   score: number;
   faulty: boolean;
+  /** Position (0-based) of the owning evaluation in the time-ordered list. */
+  roundIndex: number;
 }
 
 export interface CalibrationBucket {
@@ -78,7 +80,40 @@ export interface CalibrationReport {
   };
   dataRichestMetrics: MetricKey[];
   dataSparseMetrics: MetricKey[]; // outcomes with little/no coverage
+  rubricDrift: RubricDriftEntry[]; // metrics whose score rose but fault rate stayed high
+  reliability: ReliabilityDiagram;
+  ece: number; // expected calibration error over confidence buckets
   summary: string;
+}
+
+/** A dimension behaving as if its scoring rubric is systematically missing faults. */
+export interface RubricDriftEntry {
+  metric: MetricKey;
+  samples: number;
+  earlyMeanScore: number;
+  lateMeanScore: number;
+  scoreRise: number; // late - early
+  faultRate: number;
+  flag: "drift" | "rising-inconclusive" | "steady-risk" | "ok";
+}
+
+export interface ReliabilityBucket {
+  low: number;
+  label: string;
+  count: number;
+  /** Observed fault probability in this bucket. */
+  probFaulty: number;
+  /** Mean confidence reported in this bucket. */
+  meanConfidence: number;
+  /** abs(meanConfidence - probFaulty); small = well calibrated. */
+  gap: number;
+}
+
+export interface ReliabilityDiagram {
+  buckets: ReliabilityBucket[];
+  /** Higher-confidence buckets should correlate with lower probFaulty. */
+  rankCorrelation: number; // simple sign metric: -1..1
+  monotonicUphill: boolean; // higher confidence monotonically lowers fault probability
 }
 
 interface SampleSource {
@@ -124,7 +159,8 @@ export function collectSamples(
   const metricSamples: ConfidenceSample[] = [];
   const changeSamples: { evaluationKey: string; faulty: boolean }[] = [];
 
-  for (const { key, evaluation } of evaluations) {
+  for (let round = 0; round < evaluations.length; round++) {
+    const { key, evaluation } = evaluations[round]!;
     for (const metricKey of METRIC_KEYS) {
       const me = evaluation.metrics?.[metricKey];
       if (!me?.applicable || me.score === undefined || me.confidence === undefined) continue;
@@ -135,7 +171,8 @@ export function collectSamples(
         evaluationKey: key,
         confidence: me.confidence,
         score: me.score,
-        faulty: metricFaultVerdict.get(faultKey)!
+        faulty: metricFaultVerdict.get(faultKey)!,
+        roundIndex: round
       });
     }
     if (opts.includeChangeLevel && changeFaultVerdict.has(key)) {
@@ -237,7 +274,15 @@ export function buildCalibrationReport(
   // 5) Change-level
   const changeFaulty = changeSamples.filter((c) => c.faulty).length;
 
-  const summary = buildSummary({ metricSamples, buckets, falseConfidence, hcCount, hcFaulty, changeSamples });
+  // 6) Rubric drift — a metric whose score rose over rounds yet still has
+  //    high fault rate (the scoring rubric is likely systematically missing faults).
+  const rubricDrift = detectRubricDrift(metricSamples);
+
+  // 7) Reliability diagram + ECE over the confidence buckets.
+  const reliability = buildReliabilityDiagram(buckets);
+  const ece = computeECE(reliability.buckets);
+
+  const summary = buildSummary({ metricSamples, buckets, falseConfidence, hcCount, hcFaulty, changeSamples, rubricDrift, ece });
 
   return {
     buckets,
@@ -247,8 +292,113 @@ export function buildCalibrationReport(
     changeLevel: { samples: changeSamples.length, faultyChanges: changeFaulty, faultRate: changeSamples.length === 0 ? 0 : changeFaulty / changeSamples.length },
     dataRichestMetrics: dataRichest,
     dataSparseMetrics: dataSparse,
+    rubricDrift,
+    reliability,
+    ece,
     summary
   };
+}
+
+/** Detect dimensions where reported quality rose across rounds but hazards did not. */
+export function detectRubricDrift(metricSamples: ConfidenceSample[]): RubricDriftEntry[] {
+  const byMetric = groupBy(metricSamples, (s) => s.metric);
+  const out: RubricDriftEntry[] = [];
+
+  for (const [metric, samples] of byMetric) {
+    if (samples.length < MIN_BUCKET_COUNT) continue; // not enough signal
+    const ordered = [...samples].sort((a, b) => a.roundIndex - b.roundIndex);
+    const mid = Math.floor(ordered.length / 2);
+    const early = ordered.slice(0, mid);
+    const late = ordered.slice(mid);
+    const earlyMean = mean(early.map((s) => s.score));
+    const lateMean = mean(late.map((s) => s.score));
+    const scoreRise = lateMean - earlyMean;
+    const overallFaultRate = ordered.filter((s) => s.faulty).length / ordered.length;
+    // Drift is about *late* behaviour: if faults mostly happened early and
+    // cleared late, that's healthy. Only a sustained late fault rate is bad.
+    const lateFaultRate = late.length === 0 ? 0 : late.filter((s) => s.faulty).length / late.length;
+
+    let flag: RubricDriftEntry["flag"];
+    if (scoreRise >= 0.5 && lateFaultRate >= 0.35 && overallFaultRate >= 0.35) {
+      flag = "drift"; // score rose, faults persisted into recent rounds
+    } else if (scoreRise >= 0.5) {
+      flag = "rising-inconclusive"; // score improved with low fault rate (fine)
+    } else if (lateFaultRate >= 0.35 || overallFaultRate >= 0.35) {
+      flag = "steady-risk"; // faults persist but no score improvement claimed
+    } else {
+      flag = "ok";
+    }
+
+    out.push({
+      metric,
+      samples: ordered.length,
+      earlyMeanScore: round1(earlyMean),
+      lateMeanScore: round1(lateMean),
+      scoreRise: round1(scoreRise),
+      faultRate: round1(overallFaultRate),
+      flag
+    });
+  }
+
+  return out.sort((a, b) => (b.flag === "drift" ? 1 : 0) - (a.flag === "drift" ? 1 : 0));
+}
+
+/** Build a reliability diagram from already-computed confidence buckets. */
+export function buildReliabilityDiagram(buckets: CalibrationBucket[]): ReliabilityDiagram {
+  const diagram: ReliabilityDiagram = {
+    buckets: buckets.map((b) => {
+      // Recompute mean confidence: we only kept aggregate rates in buckets, so
+      // reconstruct approximate mean-confidence from the bucket's low edge + 0.05.
+      const meanConfidence = Math.min(b.low + 0.05, 0.95);
+      const probFaulty = b.count === 0 ? 0 : b.faultyCount / b.count;
+      return {
+        low: b.low,
+        label: b.label,
+        count: b.count,
+        probFaulty,
+        meanConfidence,
+        gap: Math.abs(meanConfidence - probFaulty)
+      };
+    }),
+    rankCorrelation: 0,
+    monotonicUphill: false
+  };
+
+  // Rank correlation (simple): does probFaulty decrease as confidence rises?
+  const suff = diagram.buckets.filter((b) => b.count >= MIN_BUCKET_COUNT);
+  if (suff.length >= 2) {
+    // Kendall-lite: count concordant pairs (conf up => faulty down or same)
+    let concordant = 0;
+    let discordant = 0;
+    let pairs = 0;
+    for (let i = 0; i < suff.length; i++) {
+      for (let j = i + 1; j < suff.length; j++) {
+        if (suff[i]!.low === suff[j]!.low) continue;
+        pairs++;
+        const confAsc = suff[j]!.low > suff[i]!.low;
+        const faultyDesc = suff[j]!.probFaulty <= suff[i]!.probFaulty;
+        if (confAsc === faultyDesc) concordant++;
+        else discordant++;
+      }
+    }
+    diagram.rankCorrelation = pairs === 0 ? 0 : round1((concordant - discordant) / pairs);
+    // Monotonic: after excluding zero-sample buckets, fault prob never rises with confidence.
+    diagram.monotonicUphill = suff.every((b, i, arr) => i === 0 || b.probFaulty <= arr[i - 1]!.probFaulty);
+  }
+  return diagram;
+}
+
+/** Expected Calibration Error over confidence buckets (Brier-like distance). */
+export function computeECE(buckets: ReliabilityBucket[]): number {
+  const totalCount = buckets.reduce((a, b) => a + b.count, 0);
+  if (totalCount === 0) return 0;
+  let acc = 0;
+  for (const b of buckets) {
+    if (b.count === 0) continue;
+    const weight = b.count / totalCount;
+    acc += weight * Math.abs(b.meanConfidence - b.probFaulty);
+  }
+  return round1(acc);
 }
 
 function buildSummary(args: {
@@ -258,8 +408,10 @@ function buildSummary(args: {
   hcCount: number;
   hcFaulty: number;
   changeSamples: { evaluationKey: string; faulty: boolean }[];
+  rubricDrift: RubricDriftEntry[];
+  ece: number;
 }): string {
-  const { metricSamples, buckets, falseConfidence, hcCount, hcFaulty, changeSamples } = args;
+  const { metricSamples, buckets, falseConfidence, hcCount, hcFaulty, changeSamples, rubricDrift, ece } = args;
   if (metricSamples.length === 0) {
     return "No metric-scoped outcomes recorded yet. Add outcomes (jev-metrics outcome) after your changes reach the field or a staging gate to start auditing calibration.";
   }
@@ -300,6 +452,17 @@ function buildSummary(args: {
   if (hcCount > 0 && hcFaulty > 0) {
     parts.push(`Headline false-confidence rate: ${(hcFaulty / hcCount * 100).toFixed(1)}% of high-confidence metrics were faulty.`);
   }
+  const drifts = rubricDrift.filter((d) => d.flag === "drift");
+  if (drifts.length > 0) {
+    parts.push(
+      `Rubric drift suspected in: ${drifts.map((d) => d.metric).join(", ")} — scores rose ${drifts
+        .map((d) => `+${d.scoreRise.toFixed(1)}`)
+        .join("/")} over rounds but fault rate stayed >= 35%. This scoring rubric is likely systematically missing real faults.`
+    );
+  }
+  if (ece > 0) {
+    parts.push(`Expected Calibration Error (ECE): ${ece.toFixed(3)} — lower is better.`);
+  }
   return parts.join("\n");
 }
 
@@ -310,4 +473,24 @@ export function fmtPct(x: number): string {
 
 function toBool(x: number | boolean): boolean {
   return typeof x === "boolean" ? x : x !== 0;
+}
+
+function groupBy<T, K extends string | number | symbol>(xs: T[], keyFn: (x: T) => K): Map<K, T[]> {
+  const map = new Map<K, T[]>();
+  for (const x of xs) {
+    const k = keyFn(x);
+    const arr = map.get(k);
+    if (arr) arr.push(x);
+    else map.set(k, [x]);
+  }
+  return map;
+}
+
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
 }
