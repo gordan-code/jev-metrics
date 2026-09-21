@@ -1,0 +1,79 @@
+name: jev-report
+
+# Generates the Jev Metrics calibration/trend report from committed evaluation
+# and outcome JSON files.
+#
+# Triggers:
+#   - manually (workflow_dispatch)
+#   - on a PR merge to the default branch (the "after facts" moment)
+#   - on a `/jev-report` comment on a PR or issue
+#
+# Expected input layout (defaults, configurable via action inputs / env):
+#   evals/*.json            evaluation snapshots (bare Eval / wrapper / MCP resp.)
+#   evals/outcomes/*.json   after-the-fact outcome markers
+#
+# Note: reports surface real regressions only when you record *outcomes* after
+# your changes reach the field / a staging gate.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write # to post the report as a PR comment on /jev-report
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/jev-report'))
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install + build
+        run: |
+          npm ci --cache .npm-cache-ci --ignore-scripts
+          npm run build
+
+      - name: Generate report
+        id: report
+        env:
+          JEV_METRICS_EVALS_DIR: evals
+          JEV_METRICS_OUTCOMES_DIR: evals/outcomes
+        run: |
+          node scripts/action.mjs > report.md
+          echo "report_path=report.md" >> "$GITHUB_OUTPUT"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-metrics-report
+          path: report.md
+
+      - name: Post report as PR comment (on /jev-report)
+        if: github.event_name == 'issue_comment'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body-file: report.md
+          edit-mode: replace
+
+      - name: Post report as PR comment (on PR merge)
+        if: github.event_name == 'push' && github.event.pull_request == null
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.number }}
+          body-file: report.md
+          edit-mode: replace

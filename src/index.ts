@@ -16,4 +16,6 @@ export { main as cliMain } from "./cli.js";
 export { detectGit, normalizeRemote } from "./git.js";
 export type { GitMetadata } from "./git.js";
 export { extractEvaluation, extractContext, extractKeyHint, extractKindHint } from "./parse.js";
+export { buildReportFromFiles, renderReportFromFiles } from "./fromFiles.js";
+export type { FromFilesOptions } from "./fromFiles.js";
 export * from "./types.js";

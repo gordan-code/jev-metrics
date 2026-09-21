@@ -147,6 +147,26 @@ Set `JEV_METRICS_DB` as a default `--db`. The DB path defaults to `.jev-metrics.
 
 ---
 
+## GitHub Action
+
+A workflow (`.github/workflows/jev-report.yml`) and entrypoint (`scripts/action.mjs`) generate a report from **committed** JSON files — useful when you want the trend/calibration visible in CI.
+
+The Action reads:
+- `evals/*.json` — evaluation snapshots (bare Eval / metadata wrapper / MCP response)
+- `evals/outcomes/*.json` — after-the-fact outcome markers
+
+and writes the Markdown report to the job summary, an artifact, and (on `/jev-report` or merge) a linked PR/issue comment with `pull-requests: write`.
+
+```bash
+# Same logic locally, no CI:
+JEV_METRICS_EVALS_DIR=evals JEV_METRICS_OUTCOMES_DIR=evals/outcomes \
+  node scripts/action.mjs > report.md
+```
+
+> Real regressions surface only when you actually record outcomes after a change ships (or reaches a staging gate) — the Action reports facts you recorded, not magic.
+
+---
+
 ## Schema
 
 Two tables (created automatically via `node:sqlite`):
@@ -183,10 +203,12 @@ The core is intentionally small (three modules: `store`, `calibration`, `report`
 - **Per-metric rubric drift** ✅ — flags a metric whose average score rose across rounds yet fault rate stayed high (≥35% in recent rounds), i.e. the most likely rubric failure.
 - **Reliability diagram + ECE** ✅ — a real confidence-vs-fault curve, monotonicity check, and Expected Calibration Error for full calibration reporting.
 - **Auto-record** ✅ — `record` accepts a raw `jev_review` MCP response directly and `--auto` infers repo/commit/key from git, so annotating each PR is one command.
+- **GitHub Action** ✅ — `scripts/action.mjs` + a workflow that emits the report to a job summary, artifact, and optional PR/issue comment.
 
-Next:
+Ideas for later:
 
-- **GitHub Action** — generate the report as a PR comment on merge.
+- **Reliability diagram as a chart** — render the confidence-vs-fault curve as an SVG/PNG (no extra runtime deps, hand-rolled) instead of a table.
+- **Whole-change calibration** — surface the change-level fault rate more prominently alongside metric-level buckets.
 
 ---
 
@@ -200,11 +222,17 @@ src/
   report.ts        Markdown trend + calibration report
   parse.ts         extract an Evaluation from wrapper/MCP-response shapes
   git.ts           best-effort repo/commit inference for --auto
+  fromFiles.ts     rebuild a report from committed JSON files (Action core)
   cli.ts           record / outcome / report / export commands
   index.ts         library entry
+scripts/
+  action.mjs       GitHub Action entrypoint (writes a step summary / stdout)
+.github/workflows/
+  jev-report.yml   workflow: manual, merge, or /jev-report comment
 test/
   metrics.test.js  unit tests (store, calibration, report)
   parse.test.js    unit tests (parse, git helpers)
+  fromFiles.test.js unit tests (file-based report rebuild)
 demo/
   *.json           sample evaluations + buildable CLI run
 ```
