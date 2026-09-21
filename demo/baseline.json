@@ -1,0 +1,31 @@
+{
+  "metadata": { "key": "pr-42-baseline", "repo": "acme/api", "commit": "abc123", "kind": "baseline" },
+  "evaluation": {
+    "metrics": {
+      "correctness": { "applicable": true, "score": 6.2, "confidence": 0.82 },
+      "cognitiveComplexity": { "applicable": true, "score": 5.5, "confidence": 0.74 },
+      "readability": { "applicable": true, "score": 7.1, "confidence": 0.8 },
+      "modularity": { "applicable": true, "score": 5.9, "confidence": 0.71 },
+      "coupling": { "applicable": true, "score": 7.0, "confidence": 0.66 },
+      "changeability": { "applicable": true, "score": 5.8, "confidence": 0.7 },
+      "abstractionQuality": { "applicable": false },
+      "projectStructure": { "applicable": false },
+      "duplication": { "applicable": false },
+      "maintainability": { "applicable": true, "score": 6.0, "confidence": 0.77 },
+      "testQuality": { "applicable": true, "score": 4.5, "confidence": 0.61 },
+      "reliability": { "applicable": true, "score": 6.8, "confidence": 0.83 },
+      "security": { "applicable": true, "score": 7.6, "confidence": 0.91 },
+      "consistency": { "applicable": false },
+      "documentation": { "applicable": false },
+      "performance": { "applicable": false },
+      "scalability": { "applicable": false },
+      "compatibility": { "applicable": true, "score": 8.0, "confidence": 0.9 },
+      "observability": { "applicable": false }
+    },
+    "priorities": [
+      { "metric": "testQuality", "severity": "medium", "reason": "testQuality is 4.5." },
+      { "metric": "cognitiveComplexity", "severity": "medium", "reason": "cognitiveComplexity is 5.5." }
+    ]
+  },
+  "context": { "task": "Add paginated search endpoint" }
+}

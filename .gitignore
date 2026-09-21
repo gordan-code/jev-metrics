@@ -1,0 +1,7 @@
+node_modules/
+.npm-cache/
+dist/
+test-dist/
+*.sqlite
+*.sqlite-journal
+*.db

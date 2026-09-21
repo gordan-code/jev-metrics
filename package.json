@@ -1,0 +1,26 @@
+{
+  "name": "jev-metrics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Time-series persistence and calibration audit for TypeSafe Jev evaluation results. Complements jev-review by turning scalar scores into a quality trend, and by auditing whether Jev's calibrated confidence actually predicts real regressions.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "jev-metrics": "./dist/cli.js",
+    "jev-report": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/**/*.test.js",
+    "valid": "npm run check && npm test"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "typescript": "7.0.2"
+  },
+  "license": "MIT"
+}
