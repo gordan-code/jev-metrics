@@ -5,7 +5,7 @@ name: jev-report
 #
 # Triggers:
 #   - manually (workflow_dispatch)
-#   - on a PR merge to the default branch (the "after facts" moment)
+#   - on a push to the repository's default branch
 #   - on a `/jev-report` comment on a PR or issue
 #
 # Expected input layout (defaults, configurable via action inputs / env):
@@ -18,7 +18,10 @@ name: jev-report
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # Both names are listed because a repo created with `git init` defaults to
+    # `master` while GitHub's UI-created repos default to `main`. Matching the
+    # actual default branch is required or push runs never fire.
+    branches: [main, master]
   issue_comment:
     types: [created]
 
@@ -48,13 +51,14 @@ jobs:
           npm run build
 
       - name: Generate report
-        id: report
         env:
           JEV_METRICS_EVALS_DIR: evals
           JEV_METRICS_OUTCOMES_DIR: evals/outcomes
-        run: |
-          node scripts/action.mjs > report.md
-          echo "report_path=report.md" >> "$GITHUB_OUTPUT"
+        run: node scripts/action.mjs > report.md
+
+      # Surface the report directly in the Actions run UI.
+      - name: Job summary
+        run: cat report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
@@ -62,18 +66,12 @@ jobs:
           name: jev-metrics-report
           path: report.md
 
-      - name: Post report as PR comment (on /jev-report)
+      # A push event has no issue/PR number, so commenting is only valid for
+      # the `/jev-report` comment trigger.
+      - name: Post report as comment (/jev-report)
         if: github.event_name == 'issue_comment'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
-          body-file: report.md
-          edit-mode: replace
-
-      - name: Post report as PR comment (on PR merge)
-        if: github.event_name == 'push' && github.event.pull_request == null
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.number }}
           body-file: report.md
           edit-mode: replace
