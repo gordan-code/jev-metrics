@@ -45,10 +45,17 @@ npm run build        # emits dist/cli.js
 
 ### 1 · Record evaluations
 
-Pipe a `jev-review`-style `Evaluation` JSON (the exact shape `jev_review` returns) into `record`:
+Pipe an evaluation into `record`. Three shapes are accepted automatically:
+
+1. **A raw `jev_review` MCP response** — the exact `{ content, structuredContent }` object an agent receives, with the `Evaluation` extracted for you:
 
 ```bash
-# wrapper form (recommended): metadata + evaluation
+node dist/cli.js record --db .jev-metrics.sqlite --auto --kind final --file evals/pr-42.json
+```
+
+2. **A metadata wrapper** (recommended when you control the file):
+
+```bash
 node dist/cli.js record --db .jev-metrics.sqlite --file evals/pr-42-final.json
 ```
 
@@ -66,7 +73,11 @@ node dist/cli.js record --db .jev-metrics.sqlite --file evals/pr-42-final.json
 }
 ```
 
-`key` is required and is the correlation handle for outcomes. Re-recording the same `key` **upserts** (so rescores replace the baseline only if you choose the same key — in practice give baseline/rescore/final distinct keys to keep the trend).
+3. **A bare `Evaluation`** plus `--key`.
+
+`--auto` infers `repo` and `commit` from the current git repository (`git remote get-url origin` normalized to `owner/repo`, plus `git rev-parse --short HEAD`), and forms a stable `key` like `<repo>@<short-hash>` when none is given. Explicit `--key` / `--repo` / `--commit` always win over auto-detection.
+
+`key` is the correlation handle for outcomes. Re-recording the same `key` **upserts** (so a baseline and a rescore should use distinct keys to keep the trend).
 
 ### 2 · Record after-the-fact outcomes
 
@@ -116,9 +127,12 @@ Read it top-down:
 ## CLI reference
 
 ```
-jev-metrics record   --db <p> [--key k] [--repo r] [--commit c] [--kind k] [--file <path>|-]
-                     Reads Evaluation JSON from --file or stdin. Bare-Evaluation
-                     form requires --key; wrapper form carries metadata inline.
+jev-metrics record   --db <p> [--key k] [--repo r] [--commit c] [--kind k] [--auto] [--file <path>|-]
+                     Reads an Evaluation from --file or stdin. Accepts a bare
+                     Evaluation, a {metadata, evaluation} wrapper, or a raw
+                     jev_review {content, structuredContent} response.
+                     --auto  infers repo/commit from git, and a stable key when
+                             none is given.
 
 jev-metrics outcome  --db <p> --key <evaluation-key> [--metric <name>] [--faulty] [--note t]
 
@@ -168,10 +182,10 @@ The core is intentionally small (three modules: `store`, `calibration`, `report`
 
 - **Per-metric rubric drift** ✅ — flags a metric whose average score rose across rounds yet fault rate stayed high (≥35% in recent rounds), i.e. the most likely rubric failure.
 - **Reliability diagram + ECE** ✅ — a real confidence-vs-fault curve, monotonicity check, and Expected Calibration Error for full calibration reporting.
+- **Auto-record** ✅ — `record` accepts a raw `jev_review` MCP response directly and `--auto` infers repo/commit/key from git, so annotating each PR is one command.
 
 Next:
 
-- **Auto-split review** — feed a `jev_review` structured response directly (it already returns the `Evaluation` shape) so annotating after each PR is one call.
 - **GitHub Action** — generate the report as a PR comment on merge.
 
 ---
@@ -182,12 +196,15 @@ Next:
 src/
   types.ts         Evaluation + persistence envelope types
   store.ts         node:sqlite persistence (evaluations + outcomes)
-  calibration.ts   calibration & false-confidence audit
+  calibration.ts   calibration, false-confidence & rubric-drift audit
   report.ts        Markdown trend + calibration report
+  parse.ts         extract an Evaluation from wrapper/MCP-response shapes
+  git.ts           best-effort repo/commit inference for --auto
   cli.ts           record / outcome / report / export commands
   index.ts         library entry
 test/
   metrics.test.js  unit tests (store, calibration, report)
+  parse.test.js    unit tests (parse, git helpers)
 demo/
   *.json           sample evaluations + buildable CLI run
 ```

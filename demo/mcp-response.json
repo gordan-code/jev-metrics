@@ -1,0 +1,17 @@
+{
+  "content": [{ "type": "text", "text": "{\"metrics\":{}}" }],
+  "structuredContent": {
+    "metrics": {
+      "correctness": { "applicable": true, "score": 7.5, "confidence": 0.85 },
+      "security": { "applicable": true, "score": 7.2, "confidence": 0.9 },
+      "testQuality": { "applicable": true, "score": 6.8, "confidence": 0.7 },
+      "performance": { "applicable": false },
+      "scalability": { "applicable": false },
+      "compatibility": { "applicable": false },
+      "observability": { "applicable": false }
+    },
+    "priorities": [],
+    "improvements": ["testQuality: 5.5 -> 6.8"],
+    "regressions": []
+  }
+}

@@ -2,8 +2,10 @@
 import { parseArgs } from "node:util";
 import { readFileSync, writeFileSync } from "node:fs";
 import { MetricsStore } from "./store.js";
-import { METRIC_KEYS_SET, type Evaluation, type MetricKey, type OutcomeInput } from "./types.js";
+import { METRIC_KEYS_SET, type MetricKey, type OutcomeInput } from "./types.js";
 import { buildMetricsReport, renderMarkdownReport, summarizeEvaluationBrief } from "./report.js";
+import { detectGit } from "./git.js";
+import { extractEvaluation, extractContext, extractKeyHint, extractKindHint } from "./parse.js";
 
 const DEFAULT_DB = ".jev-metrics.sqlite";
 
@@ -12,10 +14,12 @@ function usage(help: boolean): void {
 
 USAGE (all subcommands take --db <path>; default ${DEFAULT_DB}):
 
-  jev-metrics record [--key <k>] [--repo <r>] [--commit <c>] [--kind <baseline|rescore|final>] [--file <path>|-]
-      Read an Evaluation JSON (or {"evaluation":..., "metadata": {...}} wrapper) and persist it.
-      With no --file, reads JSON from stdin.
-      If the JSON is a bare Evaluation and no --key is given, requires --key.
+  jev-metrics record [--key <k>] [--repo <r>] [--commit <c>] [--kind <baseline|rescore|final>] [--auto] [--file <path>|-]
+      Read an Evaluation JSON and persist it. Accepts a bare Evaluation,
+      {metadata, evaluation} wrapper, or a raw jev_review {content, structuredContent}
+      response. With no --file, reads JSON from stdin.
+      --auto  derives repo + commit from the current git repo, and (with no --key)
+              forms a stable key like "<repo>@<short-hash>".
 
   jev-metrics outcome --key <evaluationKey> [--metric <name>] [--faulty] [--note <text>]
       Record an after-the-fact truth marker for a recorded evaluation key.
@@ -53,46 +57,47 @@ function parseJsonSafely(text: string): unknown {
   return JSON.parse(trimmed);
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
 function cmdRecord(dbPath: string, flags: Record<string, unknown>): void {
   const store = new MetricsStore(dbPath);
   try {
     const raw = readJsonArg(String(flags.file ?? "-"));
-    let evaluation: Evaluation;
-    let metadata: { key: string; repo?: string; commit?: string; label?: string; kind?: string; context?: Record<string, unknown> };
-
-    if (raw && isRecord(raw) && raw.evaluation && isRecord(raw.evaluation)) {
-      // Wrapper form: { metadata?: {...}, evaluation: {...}, context?: {...} }
-      const wrap = raw as { metadata?: Record<string, unknown>; evaluation: Evaluation; context?: Record<string, unknown> };
-      evaluation = wrap.evaluation;
-      const md = isRecord(wrap.metadata) ? wrap.metadata : {};
-      metadata = {
-        key: String(md.key ?? flags.key ?? ""),
-        repo: (md.repo as string | undefined) ?? (flags.repo as string | undefined),
-        commit: (md.commit as string | undefined) ?? (flags.commit as string | undefined),
-        label: md.label as string | undefined,
-        kind: (md.kind as string | undefined) ?? (flags.kind as string | undefined) ?? "baseline",
-        context: wrap.context
-      };
-    } else {
-      // Bare Evaluation form; key must come from flags.
-      evaluation = raw as Evaluation;
-      metadata = {
-        key: String(flags.key ?? ""),
-        repo: flags.repo as string | undefined,
-        commit: flags.commit as string | undefined,
-        kind: (flags.kind as string | undefined) ?? "baseline"
-      };
+    const evaluation = extractEvaluation(raw);
+    if (!evaluation) {
+      throw new Error(
+        "Could not locate an Evaluation in the input. Expected a bare Evaluation, {metadata, evaluation}, or a jev_review {content, structuredContent} response."
+      );
     }
 
-    if (!metadata.key) throw new Error("A `key` is required (wrapper metadata.key, --key, or --file with metadata).");
+    const explicitRepo = flags.repo as string | undefined;
+    const explicitCommit = flags.commit as string | undefined;
+    let git: { repo?: string; commit?: string } = {};
+    if (Boolean(flags.auto)) git = detectGit();
+
+    const repo = explicitRepo ?? git.repo;
+    const commit = explicitCommit ?? git.commit;
+    const key =
+      String(flags.key ?? extractKeyHint(raw) ?? "") ||
+      (git.commit ? `${repo ?? "repo"}@${git.commit}` : "");
+
+    const metadata = {
+      key,
+      repo,
+      commit,
+      label: flags.label as string | undefined,
+      kind: (flags.kind as string | undefined) ?? extractKindHint(raw) ?? "baseline",
+      context: extractContext(raw)
+    };
+
+    if (!metadata.key) {
+      throw new Error(
+        "A `key` is required. Pass --key, include metadata.key in the wrapper, or use --auto to derive one from git."
+      );
+    }
 
     const stored = store.recordEvaluation(metadata, evaluation, metadata.context);
+    const gitNote = Boolean(flags.auto) ? ` repo=${repo ?? "-"} commit=${commit ?? "-"}` : "";
     process.stderr.write(
-      `recorded #${stored.id} key="${stored.key}" kind=${stored.kind} (${summarizeEvaluationBrief(evaluation)})\n`
+      `recorded #${stored.id} key="${stored.key}" kind=${stored.kind}${gitNote} (${summarizeEvaluationBrief(evaluation)})\n`
     );
   } finally {
     store.close();
@@ -172,6 +177,7 @@ export function main(argv: string[]): void {
       label: { type: "string" },
       kind: { type: "string" },
       file: { type: "string" },
+      auto: { type: "boolean", default: false },
       metric: { type: "string" },
       faulty: { type: "boolean", default: false },
       note: { type: "string" },

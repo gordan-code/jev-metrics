@@ -13,4 +13,7 @@ export type {
 export { buildMetricsReport, buildTimeSeries, renderMarkdownReport } from "./report.js";
 export type { MetricsReport, TrendRow } from "./report.js";
 export { main as cliMain } from "./cli.js";
+export { detectGit, normalizeRemote } from "./git.js";
+export type { GitMetadata } from "./git.js";
+export { extractEvaluation, extractContext, extractKeyHint, extractKindHint } from "./parse.js";
 export * from "./types.js";
