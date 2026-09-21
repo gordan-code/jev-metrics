@@ -1,5 +1,7 @@
 # jev-metrics
 
+[简体中文](./README-zh.md) | [English](./README.md)
+
 > Time-series persistence **and** calibration audit for [TypeSafe Jev](https://typesafe.ai/) evaluation results.
 
 `jev-metrics` complements [`jev-review`](https://github.com/NiazMorshed2007/jev-review): while `jev-review` turns each Jev call into a one-shot structured evaluation, **`jev-metrics` persists those evaluations over time and, crucially, audits whether Jev's confidence is actually trustworthy.**
